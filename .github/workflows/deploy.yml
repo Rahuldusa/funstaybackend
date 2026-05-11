@@ -19,7 +19,6 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -H ${{ secrets.SERVER_IP }} >> ~/.ssh/known_hosts
 
-
       - name: Deploy Backend Files
         run: |
           rsync -avz --delete \
@@ -32,7 +31,6 @@ jobs:
           ssh -i ~/.ssh/id_ed25519 \
           -o StrictHostKeyChecking=no \
           deploy@${{ secrets.SERVER_IP }} \
-          "cd /var/www/html/funstaybackend && npm install && pm2 describe funstaybackend > /dev/null && pm2 restart funstaybackend || pm2 start server.js --name funstaybackend && pm2 save"
-
+          "cd /var/www/html/funstaybackend && npm install && pm2 delete funstaybackend || true && pm2 start index.js --name funstaybackend && pm2 save"
 
           
