@@ -1,0 +1,1111 @@
+// routes/reports.js
+const express = require('express');
+const router = express.Router();
+const db = require('../config/db');
+const cron = require('node-cron');
+
+// Get all reports
+// Get reports for a specific user
+router.get('/api/users/:userId/reports', async (req, res) => {
+  try {
+    const { userId } = req.params; // Extract userId from URL
+    
+    const [rows] = await db.promise().query(
+      'SELECT * FROM reports WHERE userId = ? ORDER BY created_at DESC',
+      [userId]
+    );
+    
+    res.json(rows.map(row => ({
+      ...row,
+      selectedFields: JSON.parse(row.selected_fields || '[]'), // Handle NULL cases
+      activeFilters: JSON.parse(row.active_filters || '{}')
+    })));
+  } catch (error) {
+    console.error('Error fetching user reports:', error);
+    res.status(500).json({ error: 'Failed to fetch reports' });
+  }
+});
+// Save a new report
+router.post('/api/reports', async (req, res) => {
+  const { name, description, selectedFields, activeFilters, userId,type} = req.body;
+
+  if (!name) {
+    return res.status(400).json({ error: 'Report name is required' });
+  }
+
+  if (!userId) {
+    return res.status(400).json({ error: 'User ID is required' });
+  }
+
+  try {
+    const [result] = await db.promise().query(
+      'INSERT INTO reports (name, description, selected_fields, active_filters, userId,type) VALUES (?, ?, ?, ?, ?,?)',
+      [name, description, JSON.stringify(selectedFields), JSON.stringify(activeFilters), userId,type]
+    );
+
+    const [newReport] = await db.promise().query('SELECT * FROM reports WHERE id = ?', [result.insertId]);
+
+    res.json({
+      ...newReport[0],
+      selectedFields: JSON.parse(newReport[0].selected_fields),
+      activeFilters: JSON.parse(newReport[0].active_filters)
+    });
+  } catch (error) {
+    console.error('Error saving report:', error);
+    res.status(500).json({ error: 'Failed to save report' });
+  }
+});
+
+// Delete a report
+router.delete('/api/reports/:id', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    await db.promise().query('DELETE FROM reports WHERE id = ?', [id]);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error deleting report:', error);
+    res.status(500).json({ error: 'Failed to delete report' });
+  }
+});
+
+// router.get("/api/fetch-lead-suppliers", (req, res) => {
+//   // First query to get lead and travel opportunity data
+//   const leadQuery = `
+//       SELECT a.*, t.destination AS travel_destination, t.quotation_id, 
+//              t.created_at AS travel_created_at, t.origincity AS travel_origincity, 
+//              t.start_date, t.end_date, t.duration, t.adults_count, t.children_count, 
+//              t.child_ages, t.approx_budget, t.description AS travel_description, t.email_sent
+//       FROM addleads a 
+//       LEFT JOIN travel_opportunity t ON a.leadid = t.leadid
+//       WHERE a.archive IS NULL
+//       ORDER BY t.leadid DESC`;
+
+//   db.query(leadQuery, (err, leadResults) => {
+//       if (err) {
+//           console.error("Error fetching lead data: ", err);
+//           return res.status(500).json({ error: "Database query failed" });
+//       }
+
+//       if (leadResults.length === 0) {
+//           return res.status(404).json({ message: "No lead data found" });
+//       }
+
+//       // Extract leadids from the results
+//       const leadIds = leadResults.map(lead => lead.leadid);
+      
+//       if (leadIds.length === 0) {
+//           return res.json(leadResults.map(lead => ({
+//               ...lead,
+//               suppliers: [],
+//               payment_logs: []
+//           })));
+//       }
+
+//       // Query to get suppliers for these leadids
+//       const supplierQuery = `
+//           SELECT * FROM suppliers 
+//           WHERE leadid IN (?) 
+//           ORDER BY leadid DESC, id DESC`;
+      
+//       // Query to get payment logs for these leadids
+//       const paymentLogQuery = `
+//           SELECT * FROM payment_log 
+//           WHERE leadid IN (?) 
+//           ORDER BY leadid DESC, paid_on DESC`;
+
+//       // Execute both queries in parallel
+//       db.query(supplierQuery, [leadIds], (supplierErr, supplierResults) => {
+//           if (supplierErr) {
+//               console.error("Error fetching supplier data: ", supplierErr);
+//               return res.status(500).json({ error: "Supplier query failed" });
+//           }
+
+//           db.query(paymentLogQuery, [leadIds], (paymentErr, paymentResults) => {
+//               if (paymentErr) {
+//                   console.error("Error fetching payment logs: ", paymentErr);
+//                   return res.status(500).json({ error: "Payment log query failed" });
+//               }
+
+//               // Group suppliers by leadid
+//               const suppliersByLead = supplierResults.reduce((acc, supplier) => {
+//                   if (!acc[supplier.leadid]) {
+//                       acc[supplier.leadid] = [];
+//                   }
+//                   acc[supplier.leadid].push(supplier);
+//                   return acc;
+//               }, {});
+
+//               // Group payment logs by leadid
+//               const paymentsByLead = paymentResults.reduce((acc, payment) => {
+//                   if (!acc[payment.leadid]) {
+//                       acc[payment.leadid] = [];
+//                   }
+//                   acc[payment.leadid].push(payment);
+//                   return acc;
+//               }, {});
+
+//               // Combine all data
+//               const combinedResults = leadResults.map(lead => ({
+//                   ...lead,
+//                   suppliers: suppliersByLead[lead.leadid] || [],
+//                   payment_logs: paymentsByLead[lead.leadid] || []
+//               }));
+
+//               res.json(combinedResults);
+//           });
+//       });
+//   });
+// });
+
+
+router.get("/api/fetch-lead-suppliers", (req, res) => {
+  // First query to get lead and travel opportunity data
+  const leadQuery = `
+      SELECT 
+    a.*, 
+    MAX(t.destination) AS travel_destination, 
+    MAX(t.quotation_id) AS quotation_id, 
+    MAX(t.created_at) AS travel_created_at, 
+    MAX(t.origincity) AS travel_origincity, 
+    MAX(t.start_date) AS start_date, 
+    MAX(t.end_date) AS end_date, 
+    MAX(t.duration) AS duration, 
+    MAX(t.adults_count) AS adults_count, 
+    MAX(t.children_count) AS children_count, 
+    MAX(t.child_ages) AS child_ages, 
+    MAX(t.approx_budget) AS approx_budget, 
+    MAX(t.description) AS travel_description, 
+    MAX(t.email_sent) AS email_sent,
+    -- Fetching the most recent updated_at for each leadid from different tables
+    GREATEST(
+        IFNULL(MAX(a.updated_at), '1970-01-01'),
+        IFNULL(MAX(t.updated_at), '1970-01-01'),
+        IFNULL(MAX(p.updatedAt), '1970-01-01'),
+        IFNULL(MAX(r.updated_at), '1970-01-01')
+    ) AS most_recent_updated_at
+FROM addleads a 
+LEFT JOIN travel_opportunity t ON a.leadid = t.leadid
+LEFT JOIN payment_log p ON a.leadid = p.leadid
+LEFT JOIN receivables r ON a.leadid = r.leadid
+WHERE a.archive IS NULL
+AND a.status = 'opportunity'
+GROUP BY a.leadid
+ORDER BY t.leadid DESC`;
+
+  db.query(leadQuery, (err, leadResults) => {
+    if (err) {
+      console.error("Error fetching lead data: ", err);
+      return res.status(500).json({ error: "Database query failed" });
+    }
+
+    if (leadResults.length === 0) {
+      return res.status(404).json({ message: "No lead data found" });
+    }
+
+    // Extract leadids from the results
+    const leadIds = leadResults.map(lead => lead.leadid);
+
+    if (leadIds.length === 0) {
+      return res.json(leadResults.map(lead => ({
+        ...lead,
+        suppliers: [],
+        payment_logs: []
+      })));
+    }
+
+    // Query to get suppliers for these leadids
+    const supplierQuery = `
+        SELECT * FROM suppliers 
+        WHERE leadid IN (?) 
+        ORDER BY leadid DESC, id DESC`;
+
+    // Query to get payment logs for these leadids
+    const paymentLogQuery = `
+        SELECT * FROM payment_log 
+        WHERE leadid IN (?) 
+        ORDER BY leadid DESC, paid_on DESC`;
+
+    // Execute both queries in parallel using Promise.all
+    Promise.all([
+      new Promise((resolve, reject) => {
+        db.query(supplierQuery, [leadIds], (supplierErr, supplierResults) => {
+          if (supplierErr) {
+            reject("Error fetching supplier data: " + supplierErr);
+          } else {
+            resolve(supplierResults);
+          }
+        });
+      }),
+      new Promise((resolve, reject) => {
+        db.query(paymentLogQuery, [leadIds], (paymentErr, paymentResults) => {
+          if (paymentErr) {
+            reject("Error fetching payment log data: " + paymentErr);
+          } else {
+            resolve(paymentResults);
+          }
+        });
+      })
+    ])
+    .then(([supplierResults, paymentResults]) => {
+      // Group suppliers by leadid
+      const suppliersByLead = supplierResults.reduce((acc, supplier) => {
+        if (!acc[supplier.leadid]) {
+          acc[supplier.leadid] = [];
+        }
+        acc[supplier.leadid].push(supplier);
+        return acc;
+      }, {});
+
+      // Group payment logs by leadid
+      const paymentsByLead = paymentResults.reduce((acc, payment) => {
+        if (!acc[payment.leadid]) {
+          acc[payment.leadid] = [];
+        }
+        acc[payment.leadid].push(payment);
+        return acc;
+      }, {});
+
+      // Combine all data
+      const combinedResults = leadResults.map(lead => ({
+        ...lead,
+        suppliers: suppliersByLead[lead.leadid] || [],
+        payment_logs: paymentsByLead[lead.leadid] || []
+      }));
+
+      res.json(combinedResults);
+    })
+    .catch((error) => {
+      console.error(error);
+      res.status(500).json({ error: "Error fetching suppliers or payment logs" });
+    });
+  });
+});
+
+
+router.get("/api/fetch-lead-suppliers-report", (req, res) => {
+  // First query to get lead and travel opportunity data
+  const leadQuery = `
+      SELECT 
+    a.*, 
+    MAX(t.destination) AS travel_destination, 
+    MAX(t.quotation_id) AS quotation_id, 
+    MAX(t.created_at) AS travel_created_at, 
+    MAX(t.origincity) AS travel_origincity, 
+    MAX(t.start_date) AS start_date, 
+    MAX(t.end_date) AS end_date, 
+    MAX(t.duration) AS duration, 
+    MAX(t.adults_count) AS adults_count, 
+    MAX(t.children_count) AS children_count, 
+    MAX(t.child_ages) AS child_ages, 
+    MAX(t.approx_budget) AS approx_budget, 
+    MAX(t.description) AS travel_description, 
+    MAX(t.email_sent) AS email_sent,
+    -- Fetching the most recent updated_at for each leadid from different tables
+    GREATEST(
+        IFNULL(MAX(a.updated_at), '1970-01-01'),
+        IFNULL(MAX(t.updated_at), '1970-01-01'),
+        IFNULL(MAX(p.updatedAt), '1970-01-01'),
+        IFNULL(MAX(r.updated_at), '1970-01-01')
+    ) AS most_recent_updated_at,
+    -- Get tag_names from customers table (using subquery to avoid join interference)
+    (
+        SELECT GROUP_CONCAT(tg.label ORDER BY tg.id SEPARATOR ',')
+        FROM customers c
+        LEFT JOIN tags tg ON 
+            FIND_IN_SET(
+                tg.id, 
+                REPLACE(REPLACE(REPLACE(c.tags, '[', ''), ']', ''), ' ', '')
+            ) > 0
+        WHERE c.id = a.customerid
+        GROUP BY c.id
+    ) AS tag_names
+FROM addleads a 
+LEFT JOIN travel_opportunity t ON a.leadid = t.leadid
+LEFT JOIN payment_log p ON a.leadid = p.leadid
+LEFT JOIN receivables r ON a.leadid = r.leadid
+WHERE a.archive IS NULL
+AND a.status = 'opportunity'
+GROUP BY a.leadid
+ORDER BY t.leadid DESC`;
+
+  db.query(leadQuery, (err, leadResults) => {
+    if (err) {
+      console.error("Error fetching lead data: ", err);
+      return res.status(500).json({ error: "Database query failed" });
+    }
+
+    if (leadResults.length === 0) {
+      return res.status(404).json({ message: "No lead data found" });
+    }
+
+    // Convert tag_names from comma-separated string to array for each lead
+    const leadResultsWithTagsArray = leadResults.map(lead => ({
+      ...lead,
+      tag_names: lead.tag_names ? lead.tag_names.split(',') : []
+    }));
+
+    // Extract leadids from the results
+    const leadIds = leadResults.map(lead => lead.leadid);
+
+    if (leadIds.length === 0) {
+      return res.json(leadResultsWithTagsArray.map(lead => ({
+        ...lead,
+        suppliers: [],
+        payment_logs: []
+      })));
+    }
+
+    // Query to get suppliers for these leadids
+    const supplierQuery = `
+        SELECT * FROM suppliers 
+        WHERE leadid IN (?) 
+        ORDER BY leadid DESC, id DESC`;
+
+    // Query to get payment logs for these leadids
+    const paymentLogQuery = `
+        SELECT * FROM payment_log 
+        WHERE leadid IN (?) 
+        ORDER BY leadid DESC, paid_on DESC`;
+
+    // Execute both queries in parallel using Promise.all
+    Promise.all([
+      new Promise((resolve, reject) => {
+        db.query(supplierQuery, [leadIds], (supplierErr, supplierResults) => {
+          if (supplierErr) {
+            reject("Error fetching supplier data: " + supplierErr);
+          } else {
+            resolve(supplierResults);
+          }
+        });
+      }),
+      new Promise((resolve, reject) => {
+        db.query(paymentLogQuery, [leadIds], (paymentErr, paymentResults) => {
+          if (paymentErr) {
+            reject("Error fetching payment log data: " + paymentErr);
+          } else {
+            resolve(paymentResults);
+          }
+        });
+      })
+    ])
+    .then(([supplierResults, paymentResults]) => {
+      // Group suppliers by leadid
+      const suppliersByLead = supplierResults.reduce((acc, supplier) => {
+        if (!acc[supplier.leadid]) {
+          acc[supplier.leadid] = [];
+        }
+        acc[supplier.leadid].push(supplier);
+        return acc;
+      }, {});
+
+      // Group payment logs by leadid
+      const paymentsByLead = paymentResults.reduce((acc, payment) => {
+        if (!acc[payment.leadid]) {
+          acc[payment.leadid] = [];
+        }
+        acc[payment.leadid].push(payment);
+        return acc;
+      }, {});
+
+      // Combine all data
+      const combinedResults = leadResultsWithTagsArray.map(lead => ({
+        ...lead,
+        suppliers: suppliersByLead[lead.leadid] || [],
+        payment_logs: paymentsByLead[lead.leadid] || []
+      }));
+
+      res.json(combinedResults);
+    })
+    .catch((error) => {
+      console.error(error);
+      res.status(500).json({ error: "Error fetching suppliers or payment logs" });
+    });
+  });
+});
+
+router.get("/api/fetch-lead-suppliers-manager-report/:managerid", (req, res) => {
+  const managerId = req.params.managerid;
+  
+  // First query to get lead and travel opportunity data filtered by managerid
+  const leadQuery = `
+    SELECT 
+      a.*, 
+      MAX(t.destination) AS travel_destination, 
+      MAX(t.quotation_id) AS quotation_id, 
+      MAX(t.created_at) AS travel_created_at, 
+      MAX(t.origincity) AS travel_origincity, 
+      MAX(t.start_date) AS start_date, 
+      MAX(t.end_date) AS end_date, 
+      MAX(t.duration) AS duration, 
+      MAX(t.adults_count) AS adults_count, 
+      MAX(t.children_count) AS children_count, 
+      MAX(t.child_ages) AS child_ages, 
+      MAX(t.approx_budget) AS approx_budget, 
+      MAX(t.description) AS travel_description, 
+      MAX(t.email_sent) AS email_sent,
+      -- Fetching the most recent updated_at for each leadid from different tables
+      GREATEST(
+          IFNULL(MAX(a.updated_at), '1970-01-01'),
+          IFNULL(MAX(t.updated_at), '1970-01-01'),
+          IFNULL(MAX(p.updatedAt), '1970-01-01'),
+          IFNULL(MAX(r.updated_at), '1970-01-01')
+      ) AS most_recent_updated_at,
+      -- Get tag_names from customers table
+      (
+          SELECT GROUP_CONCAT(tg.label ORDER BY tg.id SEPARATOR ',')
+          FROM customers c
+          LEFT JOIN tags tg ON 
+              FIND_IN_SET(
+                  tg.id, 
+                  REPLACE(REPLACE(REPLACE(c.tags, '[', ''), ']', ''), ' ', '')
+              ) > 0
+          WHERE c.id = a.customerid
+          GROUP BY c.id
+      ) AS tag_names
+    FROM addleads a 
+    LEFT JOIN travel_opportunity t ON a.leadid = t.leadid
+    LEFT JOIN payment_log p ON a.leadid = p.leadid
+    LEFT JOIN receivables r ON a.leadid = r.leadid
+    WHERE a.archive IS NULL
+      AND a.status = 'opportunity'
+      AND a.managerid = ?
+    GROUP BY a.leadid
+    ORDER BY t.leadid DESC`;
+
+  db.query(leadQuery, [managerId], (err, leadResults) => {
+    if (err) {
+      console.error("Error fetching lead data: ", err);
+      return res.status(500).json({ error: "Database query failed" });
+    }
+
+    if (leadResults.length === 0) {
+      return res.json([]); // Return empty array instead of 404
+    }
+
+    // Convert tag_names from comma-separated string to array for each lead
+    const leadResultsWithTagsArray = leadResults.map(lead => ({
+      ...lead,
+      tag_names: lead.tag_names ? lead.tag_names.split(',') : []
+    }));
+
+    // Extract leadids from the results
+    const leadIds = leadResults.map(lead => lead.leadid);
+
+    if (leadIds.length === 0) {
+      return res.json(leadResultsWithTagsArray.map(lead => ({
+        ...lead,
+        suppliers: [],
+        payment_logs: [],
+        receivables: []
+      })));
+    }
+
+    // Query to get suppliers for these leadids
+    const supplierQuery = `
+        SELECT * FROM suppliers 
+        WHERE leadid IN (?) 
+        ORDER BY leadid DESC, id DESC`;
+
+    // Query to get payment logs for these leadids
+    const paymentLogQuery = `
+        SELECT * FROM payment_log 
+        WHERE leadid IN (?) 
+        ORDER BY leadid DESC, paid_on DESC`;
+
+    // Query to get receivables for these leadids
+    const receivablesQuery = `
+        SELECT * FROM receivables 
+        WHERE leadid IN (?) 
+        ORDER BY leadid DESC, paid_on DESC`;
+
+    // Execute all queries in parallel using Promise.all
+    Promise.all([
+      new Promise((resolve, reject) => {
+        db.query(supplierQuery, [leadIds], (supplierErr, supplierResults) => {
+          if (supplierErr) {
+            reject("Error fetching supplier data: " + supplierErr);
+          } else {
+            resolve(supplierResults);
+          }
+        });
+      }),
+      new Promise((resolve, reject) => {
+        db.query(paymentLogQuery, [leadIds], (paymentErr, paymentResults) => {
+          if (paymentErr) {
+            reject("Error fetching payment log data: " + paymentErr);
+          } else {
+            resolve(paymentResults);
+          }
+        });
+      }),
+      new Promise((resolve, reject) => {
+        db.query(receivablesQuery, [leadIds], (receivablesErr, receivablesResults) => {
+          if (receivablesErr) {
+            reject("Error fetching receivables data: " + receivablesErr);
+          } else {
+            resolve(receivablesResults);
+          }
+        });
+      })
+    ])
+    .then(([supplierResults, paymentResults, receivablesResults]) => {
+      // Group suppliers by leadid
+      const suppliersByLead = supplierResults.reduce((acc, supplier) => {
+        if (!acc[supplier.leadid]) {
+          acc[supplier.leadid] = [];
+        }
+        acc[supplier.leadid].push(supplier);
+        return acc;
+      }, {});
+
+      // Group payment logs by leadid
+      const paymentsByLead = paymentResults.reduce((acc, payment) => {
+        if (!acc[payment.leadid]) {
+          acc[payment.leadid] = [];
+        }
+        acc[payment.leadid].push(payment);
+        return acc;
+      }, {});
+
+      // Group receivables by leadid
+      const receivablesByLead = receivablesResults.reduce((acc, receivable) => {
+        if (!acc[receivable.leadid]) {
+          acc[receivable.leadid] = [];
+        }
+        acc[receivable.leadid].push(receivable);
+        return acc;
+      }, {});
+
+      // Combine all data
+      const combinedResults = leadResultsWithTagsArray.map(lead => ({
+        ...lead,
+        suppliers: suppliersByLead[lead.leadid] || [],
+        payment_logs: paymentsByLead[lead.leadid] || [],
+        receivables: receivablesByLead[lead.leadid] || []
+      }));
+
+      res.json(combinedResults);
+    })
+    .catch((error) => {
+      console.error(error);
+      res.status(500).json({ error: "Error fetching suppliers or payment logs" });
+    });
+  });
+});
+router.get("/api/fetch-lead-suppliers-employee-report/:userId", (req, res) => {
+  // Get userId (employee ID) from URL parameters
+  const userId = req.params.userId;
+  
+  // Base query condition
+  let userCondition = '';
+  let queryParams = [];
+  
+  if (userId) {
+    userCondition = 'AND a.assignedSalesId = ?';
+    queryParams.push(userId);
+  }
+
+  // First query to get lead and travel opportunity data
+  const leadQuery = `
+      SELECT 
+    a.*, 
+    MAX(t.destination) AS travel_destination, 
+    MAX(t.quotation_id) AS quotation_id, 
+    MAX(t.created_at) AS travel_created_at, 
+    MAX(t.origincity) AS travel_origincity, 
+    MAX(t.start_date) AS start_date, 
+    MAX(t.end_date) AS end_date, 
+    MAX(t.duration) AS duration, 
+    MAX(t.adults_count) AS adults_count, 
+    MAX(t.children_count) AS children_count, 
+    MAX(t.child_ages) AS child_ages, 
+    MAX(t.approx_budget) AS approx_budget, 
+    MAX(t.description) AS travel_description, 
+    MAX(t.email_sent) AS email_sent,
+    -- Fetching the most recent updated_at for each leadid from different tables
+    GREATEST(
+        IFNULL(MAX(a.updated_at), '1970-01-01'),
+        IFNULL(MAX(t.updated_at), '1970-01-01'),
+        IFNULL(MAX(p.updatedAt), '1970-01-01'),
+        IFNULL(MAX(r.updated_at), '1970-01-01')
+    ) AS most_recent_updated_at
+FROM addleads a 
+LEFT JOIN travel_opportunity t ON a.leadid = t.leadid
+LEFT JOIN payment_log p ON a.leadid = p.leadid
+LEFT JOIN receivables r ON a.leadid = r.leadid
+WHERE a.archive IS NULL
+AND a.status = 'opportunity'
+${userCondition}
+GROUP BY a.leadid
+ORDER BY t.leadid DESC`;
+
+  db.query(leadQuery, queryParams, (err, leadResults) => {
+    if (err) {
+      console.error("Error fetching lead data: ", err);
+      return res.status(500).json({ error: "Database query failed" });
+    }
+
+    if (leadResults.length === 0) {
+      return res.status(404).json({ message: "No lead data found" });
+    }
+
+    // Extract leadids from the results
+    const leadIds = leadResults.map(lead => lead.leadid);
+
+    if (leadIds.length === 0) {
+      return res.json(leadResults.map(lead => ({
+        ...lead,
+        suppliers: [],
+        payment_logs: []
+      })));
+    }
+
+    // Query to get suppliers for these leadids
+    const supplierQuery = `
+        SELECT * FROM suppliers 
+        WHERE leadid IN (?) 
+        ORDER BY leadid DESC, id DESC`;
+
+    // Query to get payment logs for these leadids
+    const paymentLogQuery = `
+        SELECT * FROM payment_log 
+        WHERE leadid IN (?) 
+        ORDER BY leadid DESC, paid_on DESC`;
+
+    // Execute both queries in parallel using Promise.all
+    Promise.all([
+      new Promise((resolve, reject) => {
+        db.query(supplierQuery, [leadIds], (supplierErr, supplierResults) => {
+          if (supplierErr) {
+            reject("Error fetching supplier data: " + supplierErr);
+          } else {
+            resolve(supplierResults);
+          }
+        });
+      }),
+      new Promise((resolve, reject) => {
+        db.query(paymentLogQuery, [leadIds], (paymentErr, paymentResults) => {
+          if (paymentErr) {
+            reject("Error fetching payment log data: " + paymentErr);
+          } else {
+            resolve(paymentResults);
+          }
+        });
+      })
+    ])
+    .then(([supplierResults, paymentResults]) => {
+      // Group suppliers by leadid
+      const suppliersByLead = supplierResults.reduce((acc, supplier) => {
+        if (!acc[supplier.leadid]) {
+          acc[supplier.leadid] = [];
+        }
+        acc[supplier.leadid].push(supplier);
+        return acc;
+      }, {});
+
+      // Group payment logs by leadid
+      const paymentsByLead = paymentResults.reduce((acc, payment) => {
+        if (!acc[payment.leadid]) {
+          acc[payment.leadid] = [];
+        }
+        acc[payment.leadid].push(payment);
+        return acc;
+      }, {});
+
+      // Combine all data
+      const combinedResults = leadResults.map(lead => ({
+        ...lead,
+        suppliers: suppliersByLead[lead.leadid] || [],
+        payment_logs: paymentsByLead[lead.leadid] || []
+      }));
+
+      res.json(combinedResults);
+    })
+    .catch((error) => {
+      console.error(error);
+      res.status(500).json({ error: "Error fetching suppliers or payment logs" });
+    });
+  });
+});
+
+
+
+router.get('/comments-report/:leadid', (req, res) => {
+  const { leadid } = req.params;
+
+  const query = `
+    SELECT 
+      id,
+      leadid,
+      timestamp,
+      text,
+      name
+    FROM comments
+    WHERE leadid = ?
+    ORDER BY timestamp DESC
+  `;
+
+  db.query(query, [leadid], (err, results) => {
+    if (err) {
+      console.error("DB Fetch Error:", err);
+      return res.status(500).json({
+        success: false,
+        message: "Failed to fetch comments"
+      });
+    }
+
+    res.status(200).json(results);
+  });
+});
+
+router.post('/comments/bulk-counts', (req, res) => {
+  const { leadIds } = req.body;
+
+  if (!leadIds || leadIds.length === 0) {
+    return res.status(200).json({ counts: {}, dates: {}, comments: {} });
+  }
+
+  const placeholders = leadIds.map(() => '?').join(',');
+  const query = `
+    SELECT leadid, id, timestamp, text
+    FROM comments
+    WHERE leadid IN (${placeholders})
+  `;
+
+  db.query(query, leadIds, (err, results) => {
+    if (err) {
+      console.error("DB Bulk Comment Error:", err);
+      return res.status(500).json({ success: false, message: "Failed to fetch bulk comments" });
+    }
+
+    const counts = {};
+    const dates = {};
+    const comments = {};
+
+    leadIds.forEach(id => {
+      counts[id] = 0;
+      dates[id] = [];
+      comments[id] = [];
+    });
+
+    results.forEach(row => {
+      counts[row.leadid] = (counts[row.leadid] || 0) + 1;
+
+      if (!dates[row.leadid]) dates[row.leadid] = [];
+      dates[row.leadid].push(row.timestamp);
+
+      if (!comments[row.leadid]) comments[row.leadid] = [];
+      comments[row.leadid].push({
+        date: row.timestamp,
+        text: row.text
+      });
+    });
+
+    res.status(200).json({ counts, dates, comments });
+  });
+});
+// router.get('/api/check-reminders', (req, res) => {
+//   const { userId, userRole } = req.query; // must match frontend param name
+
+//   console.log('Received:', { userId, userRole });
+
+//   if (!userId || !userRole) {
+//     return res.status(400).json({ error: 'userId and userRole are required' });
+//   }
+
+//   let query = '';
+//   let params = [];
+
+//   if (userRole === 'admin') {
+//     query = `
+//       SELECT t.id, t.leadid, t.destination, t.reminder_setting
+//       FROM travel_opportunity t
+//       JOIN addleads a ON t.leadid = a.leadid
+//       WHERE t.reminder_setting IS NOT NULL
+//     `;
+//   } else if (userRole === 'manager') {
+//     query = `
+//       SELECT t.id, t.leadid, t.destination, t.reminder_setting
+//       FROM travel_opportunity t
+//       JOIN addleads a ON t.leadid = a.leadid
+//       WHERE t.reminder_setting IS NOT NULL
+//         AND (a.managerid = ? OR a.assigneeId = ?)
+//     `;
+//     params = [userId, userId];
+//   } else if (userRole === 'employee') {
+//     query = `
+//       SELECT t.id, t.leadid, t.destination, t.reminder_setting
+//       FROM travel_opportunity t
+//       JOIN addleads a ON t.leadid = a.leadid
+//       WHERE t.reminder_setting IS NOT NULL
+//         AND a.assigneeId = ?
+//     `;
+//     params = [userId];
+//   }
+
+//   db.query(query, params, (error, results) => {
+//     if (error) {
+//       console.error('SQL Error:', error.message);
+//       return res.status(500).json({ error: 'Database error', detail: error.message });
+//     }
+
+//     console.log('Rows found:', results.length);
+
+//     const now = new Date();
+//     const currentTime = now.toISOString().slice(0, 16);
+//     const activeReminders = [];
+
+//     results.forEach(item => {
+//       if (!item.reminder_setting) return;
+
+//       const reminder = new Date(item.reminder_setting);
+//       if (isNaN(reminder.getTime())) return;
+
+//       const windows = [
+//         { time: new Date(reminder.getTime() - 3 * 60000), label: '3 Min' },
+//         { time: new Date(reminder.getTime() - 2 * 60000), label: '2 Min' },
+//         { time: new Date(reminder.getTime() - 1 * 60000), label: '1 Min' },
+//       ];
+
+//       windows.forEach(({ time, label }) => {
+//         if (isNaN(time.getTime())) return;
+
+//         const alertTime = time.toISOString().slice(0, 16);
+
+//         if (alertTime === currentTime) {
+//           activeReminders.push({
+//             id: item.id,
+//             leadid: item.leadid,
+//             destination: item.destination,
+//             label,
+//           });
+//         }
+//       });
+//     });
+
+//     console.log('Active reminders:', activeReminders);
+
+//     res.status(200).json(activeReminders);
+//   });
+// });
+
+
+
+// router.get('/api/check-reminders', (req, res) => {
+//   const { userId, userRole } = req.query;
+
+//   console.log('Received:', { userId, userRole });
+
+//   if (!userId || !userRole) {
+//     return res.status(400).json({ error: 'userId and userRole are required' });
+//   }
+
+//   let query = '';
+//   let params = [];
+
+//   // ✅ ADMIN → all reminders
+//   if (userRole === 'admin') {
+//     query = `
+//       SELECT t.id, t.leadid, t.destination, t.reminder_setting
+//       FROM travel_opportunity t
+//       WHERE t.reminder_setting IS NOT NULL
+//     `;
+//   }
+
+//   // ✅ MANAGER → their team (employees under them)
+//   else if (userRole === 'manager') {
+//     query = `
+//       SELECT t.id, t.leadid, t.destination, t.reminder_setting
+//       FROM travel_opportunity t
+//       JOIN employees e ON t.assigneeId = e.id
+//       WHERE t.reminder_setting IS NOT NULL
+//         AND e.managerId = ?
+//     `;
+//     params = [userId];
+//   }
+
+//   // ✅ EMPLOYEE → only their own
+//   else if (userRole === 'employee') {
+//     query = `
+//       SELECT t.id, t.leadid, t.destination, t.reminder_setting
+//       FROM travel_opportunity t
+//       WHERE t.reminder_setting IS NOT NULL
+//         AND t.assigneeId = ?
+//     `;
+//     params = [userId];
+//   }
+
+//   db.query(query, params, (error, results) => {
+//     if (error) {
+//       console.error('SQL Error:', error.message);
+//       return res.status(500).json({ error: 'Database error', detail: error.message });
+//     }
+
+//     console.log('Rows found:', results.length);
+
+//     const now = new Date();
+//     const currentTime = now.toISOString().slice(0, 16);
+//     const activeReminders = [];
+
+//     results.forEach(item => {
+//       if (!item.reminder_setting) return;
+
+//       const reminder = new Date(item.reminder_setting);
+//       if (isNaN(reminder.getTime())) return;
+
+//       const windows = [
+//         { time: new Date(reminder.getTime() - 3 * 60000), label: '3 Min' },
+//         { time: new Date(reminder.getTime() - 2 * 60000), label: '2 Min' },
+//         { time: new Date(reminder.getTime() - 1 * 60000), label: '1 Min' },
+//       ];
+
+//       windows.forEach(({ time, label }) => {
+//         if (isNaN(time.getTime())) return;
+
+//         const alertTime = time.toISOString().slice(0, 16);
+//         const diff = Math.abs(new Date(alertTime) - new Date(currentTime));
+
+//         if (diff < 60000) {
+//           activeReminders.push({
+//             id: item.id,
+//             leadid: item.leadid,
+//             destination: item.destination,
+//             label,
+//           });
+//         }
+//       });
+//     });
+
+//     console.log('Active reminders:', activeReminders);
+
+//     res.status(200).json(activeReminders);
+//   });
+// });
+
+// Simple API that checks and returns reminders at the right times
+// router.get('/api/check-reminders', (req, res) => {
+//   const { userId } = req.query;
+
+//   if (!userId) {
+//     return res.status(400).json({ error: 'userId is required' });
+//   }
+
+//   const query = `
+//     SELECT id, leadid, notes, reminder_setting
+//     FROM travel_opportunity
+//     WHERE reminder_setting IS NOT NULL
+//       AND User_id = ?
+//   `;
+
+//   db.query(query, [userId], (error, results) => {
+//     if (error) {
+//       console.error('SQL Error:', error.message);
+//       return res.status(500).json({ error: 'Database error' });
+//     }
+
+//     const now = new Date();
+//     const activeReminders = [];
+
+//     results.forEach(item => {
+//       const reminderTime = new Date(item.reminder_setting);
+//       if (isNaN(reminderTime.getTime())) return;
+
+//       const diffSeconds = (reminderTime - now) / 1000;
+      
+//       // Check if current time matches any alert window (±30 seconds)
+//       if (diffSeconds > 0 && diffSeconds <= 210) { // Within 3.5 minutes
+//         const minutesLeft = Math.floor(diffSeconds / 60);
+        
+//         // Only trigger at 3, 2, and 1 minutes
+//         if (minutesLeft === 3 || minutesLeft === 2 || minutesLeft === 1) {
+//           activeReminders.push({
+//             id: item.id,
+//             leadid: item.leadid,
+//             notes: item.notes,
+//             label: `${minutesLeft} Min`,
+//             reminder_time: item.reminder_setting
+//           });
+//         }
+//       }
+//       // Check for missed reminders (within 1 minute after)
+//       else if (diffSeconds <= 0 && diffSeconds >= -60) {
+//         activeReminders.push({
+//           id: item.id,
+//           leadid: item.leadid,
+//           notes: item.notes,
+//           label: "Just Now / Missed",
+//           reminder_time: item.reminder_setting
+//         });
+//       }
+//     });
+
+//     res.json(activeReminders);
+//   });
+// });
+
+
+
+router.get('/api/check-reminders', (req, res) => {
+  const { userId } = req.query;
+
+  if (!userId) {
+    return res.status(400).json({ error: 'userId is required' });
+  }
+
+  const query = `
+    SELECT id, leadid, notes, reminder_setting
+    FROM travel_opportunity
+    WHERE reminder_setting IS NOT NULL
+      AND User_id = ?
+  `;
+
+  db.query(query, [userId], (error, results) => {
+    if (error) {
+      console.error('SQL Error:', error.message);
+      return res.status(500).json({ error: 'Database error' });
+    }
+
+    const now = new Date();
+    const activeReminders = [];
+
+    results.forEach(item => {
+      const reminderTime = new Date(item.reminder_setting);
+      if (isNaN(reminderTime.getTime())) return;
+
+      const diffSeconds = Math.floor((reminderTime - now) / 1000);
+
+      // Only future reminders
+      if (diffSeconds <= 0) return;
+
+      // ⏱️ Window function (±30 sec tolerance)
+      const isInWindow = (minutes) => {
+        const target = minutes * 60;
+        return diffSeconds >= target - 30 && diffSeconds <= target + 30;
+      };
+
+      let label = null;
+
+      if (isInWindow(60)) {
+        label = "1 Hour";
+      } else if (isInWindow(30)) {
+        label = "30 Min";
+      } else if (isInWindow(15)) {
+        label = "15 Min";
+      }
+
+      if (label) {
+        activeReminders.push({
+          id: item.id,
+          leadid: item.leadid,
+          notes: item.notes,
+          label,
+          reminder_time: item.reminder_setting
+        });
+      }
+    });
+
+    res.json(activeReminders);
+  });
+});
+module.exports = router;

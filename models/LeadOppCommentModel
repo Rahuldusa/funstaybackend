@@ -1,0 +1,44 @@
+const db = require('../config/db'); // Ensure you export your database connection from a `db.js` file
+
+const getLeadData = (leadid, callback) => {
+  const query = `
+    SELECT 
+      addleads.*, 
+      travel_opportunity.*, 
+      JSON_ARRAYAGG(
+        JSON_OBJECT(
+          'id', comments.id,
+          'text', comments.text,
+          'timestamp', comments.timestamp
+        )
+      ) AS comments
+    FROM 
+      addleads
+    LEFT JOIN 
+      travel_opportunity
+    ON 
+      addleads.leadid = travel_opportunity.leadid
+    LEFT JOIN 
+      comments
+    ON 
+      addleads.leadid = comments.leadid
+    WHERE 
+      addleads.leadid = ?
+    GROUP BY 
+      addleads.leadid;
+  `;
+
+  db.query(query, [leadid], (err, results) => {
+    if (err) {
+      callback(err, null); // Pass the error to the controller
+    } else {
+      // Parse comments field if it exists and is not null
+      if (results.length && results[0].comments) {
+        results[0].comments = JSON.parse(results[0].comments);
+      }
+      callback(null, results);
+    }
+  });
+};
+
+module.exports = { getLeadData };
