@@ -3,8 +3,7 @@ name: FunstayBackend Deploy
 on:
   push:
     branches:
-      - testing
-      - production
+      - main
 
 jobs:
   deploy:
@@ -32,4 +31,10 @@ jobs:
           ssh -i ~/.ssh/id_ed25519 \
           -o StrictHostKeyChecking=no \
           deploy@${{ secrets.SERVER_IP }} \
-          "cd /var/www/html/funstaybackend && git checkout ${{ github.ref_name }} && npm install && pm2 delete funstaybackend || true && pm2 start index.js --name funstaybackend && pm2 save"
+          "cd /var/www/html/funstaybackend && npm install && pm2 delete funstaybackend || true && pm2 start index.js --name funstaybackend && pm2 save"
+
+          
+
+
+
+ 
