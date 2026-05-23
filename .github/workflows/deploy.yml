@@ -23,6 +23,9 @@ jobs:
       - name: Deploy Backend Files
         run: |
           rsync -avz --delete \
+          --exclude '.git' \
+          --exclude 'node_modules' \
+          --exclude '.env' \
           -e "ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no" \
           ./ \
           deploy@${{ secrets.SERVER_IP }}:/var/www/html/funstaybackend/
@@ -32,4 +35,10 @@ jobs:
           ssh -i ~/.ssh/id_ed25519 \
           -o StrictHostKeyChecking=no \
           deploy@${{ secrets.SERVER_IP }} \
-          "cd /var/www/html/funstaybackend && git checkout ${{ github.ref_name }} && npm install && pm2 delete funstaybackend || true && pm2 start index.js --name funstaybackend && pm2 save"
+          "cd /var/www/html/funstaybackend && \
+          git checkout ${{ github.ref_name }} && \
+          npm install && \
+          pm2 restart funstaybackend || pm2 start index.js --name funstaybackend && \
+          pm2 save"
+
+          
