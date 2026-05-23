@@ -36,9 +36,7 @@ jobs:
           -o StrictHostKeyChecking=no \
           deploy@${{ secrets.SERVER_IP }} \
           "cd /var/www/html/funstaybackend && \
-          git checkout ${{ github.ref_name }} && \
           npm install && \
           pm2 restart funstaybackend || pm2 start index.js --name funstaybackend && \
           pm2 save"
-
           
