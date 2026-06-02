@@ -3,7 +3,7 @@ name: FunstayBackend Deploy
 on:
   push:
     branches:
-      - main
+      - testing
 
 jobs:
   deploy:
@@ -32,4 +32,3 @@ jobs:
           -o StrictHostKeyChecking=no \
           root@${{ secrets.SERVER_IP }} \
           "cd /var/www/html/funstaybackend && npm install && pm2 delete funstaybackend || true && pm2 start index.js --name funstaybackend && pm2 save"
-          
