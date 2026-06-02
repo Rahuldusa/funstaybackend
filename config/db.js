@@ -8,26 +8,8 @@ const db = mysql.createConnection({
   database: 'funstay_db', // Your database name
 });
 
-// const db = mysql.createConnection({
-//   host: 'localhost',
-//   user: 'root',
-//   password: '', // Replace with your DB password
-//   database: 'funstay', // Replace with your DB name
-// });
 
-// const db = mysql.createConnection({
-//   host: 'localhost',
-//   user: 'root',
-//   password: '', // Replace with your DB password
-//   database: 'funstaydb', // Replace with your DB name
-// });
 
-// const db = mysql.createConnection({
-//   host: 'localhost',
-//   user: 'root',
-//   password: '', // Replace with your DB password
-//   database: 'funstay_db_02-06-2025',
-// });
 
 db.promise()
   .connect()
