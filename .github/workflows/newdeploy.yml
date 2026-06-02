@@ -3,7 +3,7 @@ name: FunstayBackend Deploy
 on:
   push:
     branches:
-      - testing
+      - production
 
 jobs:
   deploy:

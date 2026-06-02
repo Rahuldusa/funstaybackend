@@ -49,7 +49,7 @@ const oppWhatsappTemplates = require("./routes/OppWhatsappTemplates");
 const newRoutes = require('./routes/newsupplierroute');
 
 const app = express();
-const PORT = process.env.PORT || 7009;
+const PORT = process.env.PORT || 7008;
 
 app.use(bodyParser.json());
 app.use(cors());
