@@ -24,17 +24,12 @@ jobs:
           rsync -avz --delete \
           -e "ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no" \
           ./ \
-          deploy@${{ secrets.SERVER_IP }}:/var/www/html/funstaybackend/
+          root@${{ secrets.SERVER_IP }}:/var/www/html/funstaybackend/
 
       - name: Install Dependencies and Restart Backend
         run: |
           ssh -i ~/.ssh/id_ed25519 \
           -o StrictHostKeyChecking=no \
-          deploy@${{ secrets.SERVER_IP }} \
+          root@${{ secrets.SERVER_IP }} \
           "cd /var/www/html/funstaybackend && npm install && pm2 delete funstaybackend || true && pm2 start index.js --name funstaybackend && pm2 save"
-
           
-
-
-
- 
